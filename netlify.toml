@@ -1,0 +1,13 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Sync automático a cada 15 minutos.
+# 3 chamadas à API por execução = folga enorme no limite de 10/min do free tier.
+[functions."sync"]
+  schedule = "*/15 * * * *"
+
+# Placar ao vivo (live-score-api.com), a cada 1 minuto.
+# Só chama a API externa se houver jogo dentro da janela de horário (ver live-sync.js).
+[functions."live-sync"]
+  schedule = "* * * * *"

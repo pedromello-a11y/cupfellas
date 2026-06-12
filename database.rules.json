@@ -1,0 +1,61 @@
+{
+  "rules": {
+    ".read": true,
+
+    "claims": {
+      "$slug": {
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() === auth.uid)",
+        ".validate": "newData.child('uid').val() === auth.uid"
+      }
+    },
+
+    "participants": {
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "palpites": {
+      "$uid": {
+        "$matchId": {
+          ".write": "auth != null && auth.uid === $uid && root.child('matches').child($matchId).child('kickoffMs').val() != null && now < root.child('matches').child($matchId).child('kickoffMs').val()"
+        }
+      }
+    },
+
+    "bonus": {
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid && (root.child('meta').child('lockBonusAt').val() == null || now < root.child('meta').child('lockBonusAt').val())"
+      }
+    },
+
+    "triggers": {
+      ".write": "auth != null"
+    },
+
+    "pushSubs": {
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "reactions": {
+      "$matchId": {
+        "$targetUid": {
+          "$fromUid": {
+            ".write": "auth != null && auth.uid === $fromUid"
+          }
+        }
+      }
+    },
+
+    "chat": {
+      "$matchId": {
+        "$msgId": {
+          ".write": "auth != null && (!data.exists() || data.child('uid').val() === auth.uid)",
+          ".validate": "newData.child('uid').val() === auth.uid && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 280"
+        }
+      }
+    }
+  }
+}
