@@ -74,6 +74,7 @@ const ALIASES = {
 };
 const canon = (s) => { const n = norm(s); return ALIASES[n] || n; };
 const pairKey = (a, b) => [canon(a), canon(b)].sort().join('|');
+const isKO = (m) => !!(m && m.stage && m.stage !== 'GROUP_STAGE');
 
 // odds no formato { "1": casa, "X": empate, "2": fora } → { home, draw, away }
 function extractOdds(obj) {
@@ -249,6 +250,9 @@ exports.handler = async (event) => {
         : { home: entry.odds.away, draw: entry.odds.draw, away: entry.odds.home };
       const sc = oddsToScore(od.home, od.draw, od.away);
       palpites[m.id] = { ...sc, ts: now, bot: true, confirmed: true };
+      // Mata-mata: em caso de empate nos 90, o CPUzão manda o FAVORITO (menor odd casa/fora)
+      // pra próxima fase. Em placar decidido o avanço já é implícito, mas grava igual p/ consistência.
+      if (isKO(m)) palpites[m.id].adv = od.home <= od.away ? 'HOME' : 'AWAY';
       oddsOut[m.id]  = { home: od.home, draw: od.draw, away: od.away, fetchedAt: now };
       stats.withOdds++; stats.placed++;
     }
