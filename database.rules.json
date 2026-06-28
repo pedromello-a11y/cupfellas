@@ -56,6 +56,28 @@
           ".validate": "newData.child('uid').val() === auth.uid && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 280"
         }
       }
+    },
+
+    "activity": {
+      ".indexOn": ["ts"],
+      "$id": {
+        ".write": "auth != null && !data.exists() && newData.child('uid').val() === auth.uid && newData.child('ts').isNumber()"
+      }
+    },
+
+    "presence": {
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "jegue": {
+      "strokes": {
+        "$sid": {
+          ".write": "auth != null && ((!data.exists() && newData.child('u').val() === auth.uid) || (data.exists() && data.child('u').val() === auth.uid))",
+          ".validate": "newData.hasChildren(['u','d']) && newData.child('u').val() === auth.uid && newData.child('d').isString() && newData.child('d').val().length <= 4000"
+        }
+      }
     }
   }
 }

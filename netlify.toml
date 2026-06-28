@@ -11,3 +11,8 @@
 # Só chama a API externa se houver jogo dentro da janela de horário (ver live-sync.js).
 [functions."live-sync"]
   schedule = "* * * * *"
+
+# CPUzão: crava os jogos do dia seguinte com base nas odds (livescore-api), 1x/dia às 09:00 UTC.
+# Modo "eve" = só amanhã = 1 call. Pega odds pré-jogo enquanto ainda existem (somem após o apito).
+[functions."botfellas"]
+  schedule = "0 9 * * *"

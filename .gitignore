@@ -1,3 +1,10 @@
 node_modules/
 .env
 .netlify/
+
+# rascunho / experimentos — não fazem parte do site publicado
+/lab/
+/jegue.html
+/_*.png
+/_*.jpg
+/_*.jpeg

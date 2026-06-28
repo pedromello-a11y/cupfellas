@@ -9,6 +9,16 @@ Bolão privado para 6–15 amigos. Copa do Mundo 2026 (EUA/México/Canadá, 104 
 - Sem framework, sem build step. `npm` só se precisar do `netlify-cli` para testar functions localmente.
 - Não usar localStorage para estado crítico (só cache de conveniência); fonte de verdade é o Firebase RTDB.
 
+## LOOP DE RENDER — REGRA INVIOLÁVEL (não reabrir o bug de 22/06)
+
+O app é realtime: ~17 listeners do RTDB atualizam o estado o tempo todo (no jogo ao vivo, `/matches` a cada ~2s + presence/activity dos outros). **Reconstruir a tela inteira a cada evento trava o app e ARRANCA o `<input>` debaixo do dedo de quem digita** (teclado do celular cai, número some). Por isso:
+
+- **NUNCA** chamar `renderScreen()` / `renderSidebar()` / `renderRail()` direto dentro de um listener ou de `onData()`. Os listeners só MARCAM o que sujou via `requestRender({sidebar?,rail?,screen?})`; o render roda 1× por frame (`runRender`, via `requestAnimationFrame`). Chamada direta de `renderScreen()` só em ação do usuário (navegação, botão, admin).
+- **Enquanto um input está focado** (`isEditingInput()` → palpite `[data-mid][data-side]` ou `[data-chat]`), o render da tela fica ADIADO (`_screenDeferred`) e só descarrega no `blur` (`flushDeferredScreen`). Não destruir o input em uso.
+- Eventos que só afetam a coluna da direita (`presence`, `activity`) entram como **rail-only** — não sujam a tela.
+- Todo input de placar passa por `mkInput`, que grava cada tecla no buffer `_draft[mid]` (par incompleto sobrevive a rebuild). Novo input editável segue esse padrão.
+- Se algum dia o rebuild ainda pesar, o passo seguinte é card persistente (patch in-place) no molde do feed (`_feedEls`/`renderFeedList`), **nunca** voltar ao teardown total.
+
 ## STACK E ARQUITETURA
 
 ```

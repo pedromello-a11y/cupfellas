@@ -20,12 +20,18 @@ function norm(s) {
 const ALIASES = {
   korearepublic: 'korea', southkorea: 'korea',
   iriran: 'iran',
-  usa: 'unitedstates',
+  usa: 'unitedstates', unitedstatesofamerica: 'unitedstates',
   ivorycoast: 'cotedivoire', cotedivoire: 'cotedivoire',
   czechia: 'czechrepublic',
   turkiye: 'turkey',
   drcongo: 'congodr', democraticrepublicofthecongo: 'congodr',
   uae: 'unitedarabemirates',
+  bosniaandherzegovina: 'bosniaherzegovina',
+  capeverdeislands: 'capeverde',
+  republicofireland: 'ireland',
+  dprkorea: 'northkorea',
+  northmacedonia: 'macedonia',
+  chinesetaipei: 'taiwan',
 };
 const canon = (s) => { const n = norm(s); return ALIASES[n] || n; };
 
@@ -50,18 +56,109 @@ function winner90(h, a) {
   return 'DRAW';
 }
 
+// ──────── Feed de atividade (/activity) — Fase 2 do rail ────────
+// A live-sync já detecta cada transição (status/placar) tick a tick e grava em /matches;
+// aqui essas mesmas transições viram eventos no MESMO /activity que o cliente escuta.
+// Os nomes PT e a copy ficam no cliente (ptName); o servidor manda só o essencial
+// (mid + placar) + um `text` de reserva em tla, caso o match não esteja carregado.
+function hasScore(s) { return s && Number.isFinite(s.home) && Number.isFinite(s.away); }
+function goalsSum(s) { return hasScore(s) ? s.home + s.away : 0; }
+function tlaOf(t) { return (String((t && t.tla) || '').toUpperCase()) || (t && t.name) || '?'; }
+
+function gameEv(t, m, score) {
+  const ev = { t, ts: Date.now(), uid: 'system', name: 'BOLÃO', mid: String(m.id) };
+  if (t === 'matchstart' || !hasScore(score)) {
+    ev.text = tlaOf(m.home) + ' × ' + tlaOf(m.away);
+  } else {
+    ev.score = { home: score.home, away: score.away };
+    ev.text = tlaOf(m.home) + ' ' + score.home + '×' + score.away + ' ' + tlaOf(m.away);
+  }
+  // Chave DETERMINÍSTICA p/ idempotência: o mesmo gol/início/fim nunca vira duas linhas
+  // no feed, mesmo que a transição seja redetectada (Netlify entrega o cron at-least-once;
+  // a live-score-api às vezes "pisca" um placar menor e volta). Gol é identificado pelo
+  // placar ACUMULADO (mid+h+a): re-chegar em 1×2 reescreve o mesmo nó em vez de duplicar.
+  if (t === 'goal' && hasScore(score)) ev._key = 'g_' + m.id + '_' + score.home + '_' + score.away;
+  else if (t === 'matchstart') ev._key = 's_' + m.id;
+  else if (t === 'matchend') ev._key = 'e_' + m.id;
+  return ev;
+}
+
+// Grava o evento no /activity. Com `_key` -> PUT determinístico (idempotente); sem chave
+// -> POST gera push id, igual ao logActivity do cliente.
+// Best-effort: erro ao gravar o feed NUNCA derruba a sincronização do placar.
+async function logGameEvent(env, ev) {
+  const key = ev._key; if (key) delete ev._key;
+  try {
+    if (key) await fbFetch(env, `activity/${key}.json`, { method: 'PUT', body: JSON.stringify(ev) });
+    else await fbFetch(env, 'activity.json', { method: 'POST', body: JSON.stringify(ev) });
+    return 1;
+  } catch (e) {
+    console.error('feed event falhou', ev.t, ev.mid, e.message);
+    return 0;
+  }
+}
+
+// CRAVADA — no apito, descobre quem cravou o placar exato e emite um evento por cravador
+// no MESMO /activity. Escala por raridade: solo+improvável = lendária · solo = ousada · vários = cravada.
+// Best-effort: se faltar palpites/participantes, não emite (e nunca derruba a sincronização).
+async function emitCravadas(env, m, score, palpites, participants) {
+  if (!hasScore(score) || !palpites || !participants) return 0;
+  const exatos = [];
+  for (const uid in participants) {
+    const pal = palpites[uid] && palpites[uid][m.id];
+    if (!pal || pal.h == null || pal.a == null) continue;
+    if (pal.h === score.home && pal.a === score.away) exatos.push(uid);
+  }
+  if (!exatos.length) return 0;
+  const solo = exatos.length === 1;
+  const improv = (score.home + score.away) >= 5 || Math.abs(score.home - score.away) >= 3;
+  const tier = (solo && improv) ? 'lend' : solo ? 'ous' : 'crav';
+  let n = 0;
+  for (const uid of exatos) {
+    const p = participants[uid] || {};
+    n += await logGameEvent(env, {
+      t: 'cravada', ts: Date.now(), uid, name: p.name || 'alguém', slug: p.slug || '',
+      mid: String(m.id), score: { home: score.home, away: score.away }, solo, tier,
+      text: (p.name || 'alguém') + ' cravou ' + score.home + '×' + score.away,
+      _key: 'c_' + m.id + '_' + uid, // 1 cravada por jogo/pessoa, idempotente
+    });
+  }
+  return n;
+}
+
+// Poda eventos com mais de 48h. orderBy/endAt usa o índice "ts" (database.rules.json);
+// com o secret o índice nem é exigido. Apaga em lote com um único PATCH de nulls.
+async function pruneActivity(env) {
+  const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+  const old = await fbFetch(env, `activity.json?orderBy=%22ts%22&endAt=${cutoff}`);
+  if (!old) return 0;
+  const keys = Object.keys(old);
+  if (!keys.length) return 0;
+  const updates = {};
+  for (const k of keys) updates[k] = null;
+  await fbFetch(env, 'activity.json', { method: 'PATCH', body: JSON.stringify(updates) });
+  return keys.length;
+}
+
 exports.handler = async () => {
   const env = process.env;
+
+  // Poda do feed roda SEMPRE — independe da live-score-api e dos jogos do dia.
+  // Fica aqui em cima porque o caminho "nenhum jogo ao vivo" retorna cedo logo abaixo.
+  const pruned = await pruneActivity(env).catch((e) => { console.error('prune feed', e.message); return 0; });
+
   if (!env.LIVESCORE_API_KEY || !env.LIVESCORE_API_SECRET) {
-    return ok({ skipped: 'sem credenciais live-score-api' });
+    return ok({ pruned, skipped: 'sem credenciais live-score-api' });
   }
 
   try {
-    const [matches, locks] = await Promise.all([
+    const [matches, locks, palpites, participants] = await Promise.all([
       fbFetch(env, 'matches.json'),
       fbFetch(env, 'manualLocks.json'),
+      fbFetch(env, 'palpites.json').catch(() => null),
+      fbFetch(env, 'participants.json').catch(() => null),
     ]);
-    if (!matches) return ok({ skipped: 'sem matches' });
+    if (!matches) return ok({ pruned, skipped: 'sem matches' });
 
     // Dentro da janela do jogo, live-score-api manda mais que o status do
     // football-data.org (que no free tier às vezes marca FINISHED cedo demais).
@@ -70,7 +167,7 @@ exports.handler = async () => {
       if (!m || (locks && locks[m.id])) return false;
       return m.kickoffMs <= now && now <= m.kickoffMs + WINDOW_MS;
     });
-    if (!candidates.length) return ok({ skipped: 'nenhum jogo na janela ao vivo' });
+    if (!candidates.length) return ok({ pruned, skipped: 'nenhum jogo na janela ao vivo' });
 
     const url = `${LS_API}?key=${env.LIVESCORE_API_KEY}&secret=${env.LIVESCORE_API_SECRET}`;
     const res = await fetch(url);
@@ -79,6 +176,7 @@ exports.handler = async () => {
     const live = (json && json.data && json.data.match) || [];
 
     let updated = 0;
+    let events = 0;
     for (const m of candidates) {
       const home = canon(m.home && m.home.name);
       const away = canon(m.away && m.away.name);
@@ -87,7 +185,23 @@ exports.handler = async () => {
         const la = canon(lm.away_name);
         return (lh === home && la === away) || (lh === away && la === home);
       });
-      if (!found) continue;
+
+      if (!found) {
+        // Sumiu do feed ao vivo. Se aqui ainda consta rolando E já passou tempo de sobra pro
+        // jogo ter acabado, finaliza com o último placar conhecido. Sem isto o jogo fica preso
+        // "AO VIVO" pra sempre quando o sync de 15min (football-data.org) atrasa ou falha — foi
+        // o que aconteceu com Costa do Marfim x Equador (mostrado ao vivo depois de acabar).
+        if ((m.status === 'IN_PLAY' || m.status === 'PAUSED') && now > m.kickoffMs + 150 * 60 * 1000) {
+          await fbFetch(env, `matches/${m.id}.json`, { method: 'PATCH', body: JSON.stringify({ status: 'FINISHED' }) });
+          updated++;
+          events += await logGameEvent(env, gameEv('matchend', m, m.score));
+          events += await emitCravadas(env, m, m.score, palpites, participants);
+        }
+        continue;
+      }
+
+      // Já encerrado aqui: não deixa o feed "ressuscitar" o jogo (anti-regressão FINISHED→IN_PLAY).
+      if (m.status === 'FINISHED') continue;
 
       const newStatus = statusFromLive(found.status);
       if (!newStatus) continue;
@@ -95,9 +209,10 @@ exports.handler = async () => {
       const scoreStr = newStatus === 'FINISHED' ? (found.ft_score || found.score) : found.score;
       const score = parseScore(scoreStr);
 
+      const scoreChanged = score && (score.home !== (m.score && m.score.home) || score.away !== (m.score && m.score.away));
       const patch = {};
       if (newStatus !== m.status) patch.status = newStatus;
-      if (score && (score.home !== (m.score && m.score.home) || score.away !== (m.score && m.score.away))) {
+      if (scoreChanged) {
         patch.score = score;
         patch.winner90 = winner90(score.home, score.away);
       }
@@ -105,9 +220,27 @@ exports.handler = async () => {
 
       await fbFetch(env, `matches/${m.id}.json`, { method: 'PATCH', body: JSON.stringify(patch) });
       updated++;
+
+      // Feed: traduz a transição em evento — DEPOIS de gravar o estado, pra não repetir
+      // (o /matches já avançou; no próximo tick não sobra diff a redetectar).
+      const wasLive = m.status === 'IN_PLAY' || m.status === 'PAUSED';
+      if (patch.status === 'FINISHED') {
+        events += await logGameEvent(env, gameEv('matchend', m, score || m.score));
+        events += await emitCravadas(env, m, score || m.score, palpites, participants);
+      } else {
+        // kickoff: só na PRIMEIRA vez que entra em campo (PAUSED->IN_PLAY é volta do intervalo).
+        if (patch.status === 'IN_PLAY' && !wasLive) {
+          events += await logGameEvent(env, gameEv('matchstart', m, null));
+        }
+        // gol: só quando a soma de gols AUMENTA (0×0 do apito inicial não conta; correção
+        // de placar pra baixo via VAR também não vira "gol").
+        if (scoreChanged && goalsSum(score) > goalsSum(m.score)) {
+          events += await logGameEvent(env, gameEv('goal', m, score));
+        }
+      }
     }
 
-    return ok({ checked: candidates.length, updated });
+    return ok({ pruned, checked: candidates.length, updated, events });
   } catch (e) {
     console.error('live-sync falhou', e);
     return { statusCode: 500, body: JSON.stringify({ error: e.message }) };

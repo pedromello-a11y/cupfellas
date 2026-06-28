@@ -54,6 +54,13 @@ async function runSync(env) {
         ? s.regularTime
         : s.fullTime || { home: null, away: null };
 
+    // Quem AVANÇOU no mata-mata: vencedor GERAL (inclui prorrogação/pênaltis) via score.winner.
+    // Só importa quando empatou em 90 → o cliente dá +1 de "quem passa de fase". Em grupo fica null.
+    const isKO = m.stage && m.stage !== 'GROUP_STAGE';
+    const advancer = isKO
+      ? (s.winner === 'HOME_TEAM' ? 'HOME' : s.winner === 'AWAY_TEAM' ? 'AWAY' : null)
+      : null;
+
     matches[id] = {
       id,
       stage: m.stage || null,
@@ -70,6 +77,7 @@ async function runSync(env) {
         : { name: 'A definir', tla: '', crest: '' },
       score: { home: score90.home ?? null, away: score90.away ?? null },
       winner90: winner90(score90.home, score90.away),
+      advancer,
       venue: m.venue || null,
     };
   }

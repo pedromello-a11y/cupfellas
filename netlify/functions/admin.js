@@ -31,14 +31,20 @@ exports.handler = async (event) => {
       }
 
       case 'setScore': {
-        // Corrige/lança placar na mão e trava contra o sync automático
-        const { matchId, home, away, status } = body;
+        // Corrige/lança placar na mão e trava contra o sync automático.
+        // advancer (opcional): 'HOME'|'AWAY'|null — quem passou de fase no mata-mata.
+        // Necessário p/ o +1 de "quem passa" quando empatou em 90 e decidiu nos pênaltis/prorrogação,
+        // caso a API não traga o winner ou precise de correção manual.
+        const { matchId, home, away, status, advancer } = body;
         if (!matchId) return bad(cors, 'matchId obrigatório');
         const patch = {
           score: { home: toIntOrNull(home), away: toIntOrNull(away) },
           status: status || 'FINISHED',
           winner90: w90(toIntOrNull(home), toIntOrNull(away)),
         };
+        if (advancer === 'HOME' || advancer === 'AWAY' || advancer === null) {
+          patch.advancer = advancer;
+        }
         await fbFetch(env, `matches/${matchId}.json`, { method: 'PATCH', body: JSON.stringify(patch) });
         await fbFetch(env, `manualLocks/${matchId}.json`, { method: 'PUT', body: 'true' });
         return ok(cors, { matchId, ...patch });
