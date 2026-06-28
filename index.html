@@ -1052,6 +1052,12 @@ body.exp-banner .notif-btn.on{color:#1e1900;background:linear-gradient(180deg,va
 .pg-cav-emb{position:absolute;top:-4px;left:-2px;font-size:14px;filter:drop-shadow(0 0 4px rgba(232,197,71,.7))}
 /* chip de pontos por rosto (só quando cartas fazem os pts divergirem dentro do placar) */
 .pg-cav .pg-cav-chip{font-size:10px;padding:1px 7px;margin-top:1px}
+/* PIN "quem passa de fase": escudo da seleção escolhida, no canto inf-dir do rosto.
+   Só em palpite de EMPATE (decidido já tem o avanço implícito). Filho direto do .pg-cav
+   (NÃO do .face) p/ escapar dos filtros drop-shadow/grayscale de .pg-cav .face img. */
+.pg-advpin{position:absolute;right:-2px;bottom:1px;width:22px;height:22px;border-radius:50%;
+  object-fit:cover;background:var(--panel);box-shadow:0 0 0 2.5px var(--bg-2),0 1px 3px rgba(0,0,0,.5);z-index:3}
+.pg-lrow .pg-advpin{width:26px;height:26px}
 /* REAÇÕES = overlay no canto sup-direito do rosto (fora do fluxo → coluna tem altura fixa,
    rostos sempre alinhados; emoji é raro, não merece espaço reservado embaixo) */
 .pg-cav .react-cell{position:absolute;top:-5px;right:-5px;z-index:4;margin:0;
@@ -5013,6 +5019,15 @@ function buildPalpiteClusters(m, entries, opts){
     const av=faceAvatar(e.slug,e.name); av.title=e.name; av.style.cursor="pointer";
     av.onclick=ev=>{ ev.stopPropagation(); openProfile(e.uid); };
     u.appendChild(av);
+    // PIN "quem passa": só em palpite de EMPATE e se a pessoa escolheu quem avança
+    if(o.empate){
+      const pick=advancerPick(e.pal);
+      if(pick){
+        const pin=tpFlag(pick==='HOME'?m.home.crest:m.away.crest);
+        if(pin.tagName==='IMG'){ pin.className="pg-advpin"; pin.alt="";
+          pin.title="passa de fase: "+ptName(pick==='HOME'?m.home.name:m.away.name); u.appendChild(pin); }
+      }
+    }
     if(o.ousado) u.appendChild(el("span","pg-cav-emb ous","🦅"));
     if(IS_LOCAL){ const fx=playFx(e.uid,m.id); if(fx&&fx.scoreChanged){ const ic=fx.kind==='troca'?'🔀':fx.kind==='fant'?'👻':'🃏'; u.appendChild(el("span","pg-cav-fx",ic)); } }
     u.appendChild(el("div","pg-cav-nm",esc((e.name||"").split(" ")[0])));
@@ -5037,7 +5052,7 @@ function buildPalpiteClusters(m, entries, opts){
     const avs=el("div","pg-cavs");
     c.entries.sort((a,b)=> (b.uid===S.uid)-(a.uid===S.uid) || a.name.localeCompare(b.name)); // você primeiro
     const ousado = verdict && c.entries.length===1 && c.pts>=3 && cravCount<=2 && entries.length>=4;
-    c.entries.forEach(e=>avs.appendChild(avUnit(e,{chip:faceChips, ousado})));
+    c.entries.forEach(e=>avs.appendChild(avUnit(e,{chip:faceChips, ousado, empate:c.side==='d'})));
     row.appendChild(avs);
     return row;
   };
@@ -5061,7 +5076,7 @@ function buildPalpiteClusters(m, entries, opts){
     const avs=el("div","pg-cavs");
     c.entries.sort((a,b)=> (b.uid===S.uid)-(a.uid===S.uid) || a.name.localeCompare(b.name)); // você primeiro
     const ousado = verdict && c.entries.length===1 && c.pts>=3 && cravCount<=2 && entries.length>=4;
-    c.entries.forEach(e=>avs.appendChild(avUnit(e,{chip:faceChips, ousado})));
+    c.entries.forEach(e=>avs.appendChild(avUnit(e,{chip:faceChips, ousado, empate:c.side==='d'})));
     row.appendChild(avs);
     return row;
   };

@@ -56,6 +56,17 @@ function winner90(h, a) {
   return 'DRAW';
 }
 
+// Mata-mata: quem AVANÇOU, lido do 1X2 da live-score-api (mesma info que o sync de 15min pega
+// do football-data via score.winner, mas aqui chega em ~1min). outcomes = { full_time, extra_time,
+// penalty_shootout } com "1"=casa, "2"=fora, "X"=empate. O vencedor geral é o desfecho mais
+// DECISIVO disponível: pênaltis > prorrogação > 90min. Em fase de grupos não se aplica.
+function isKO(m) { return !!(m && m.stage && m.stage !== 'GROUP_STAGE'); }
+function advancerFromOutcomes(o) {
+  if (!o) return null;
+  const code = o.penalty_shootout || o.extra_time || o.full_time;
+  return code === '1' ? 'HOME' : code === '2' ? 'AWAY' : null;
+}
+
 // ──────── Feed de atividade (/activity) — Fase 2 do rail ────────
 // A live-sync já detecta cada transição (status/placar) tick a tick e grava em /matches;
 // aqui essas mesmas transições viram eventos no MESMO /activity que o cliente escuta.
@@ -201,7 +212,19 @@ exports.handler = async () => {
       }
 
       // Já encerrado aqui: não deixa o feed "ressuscitar" o jogo (anti-regressão FINISHED→IN_PLAY).
-      if (m.status === 'FINISHED') continue;
+      // Exceção: mata-mata que empatou em 90 e ainda está SEM advancer — o shootout às vezes é
+      // reportado um tick depois do apito. Preenche assim que a API expõe, sem esperar o sync de 15min
+      // (é o que faz o +1 de "quem passa" valer quase na hora).
+      if (m.status === 'FINISHED') {
+        if (isKO(m) && m.winner90 === 'DRAW' && !m.advancer) {
+          const adv = advancerFromOutcomes(found.outcomes);
+          if (adv) {
+            await fbFetch(env, `matches/${m.id}.json`, { method: 'PATCH', body: JSON.stringify({ advancer: adv }) });
+            updated++;
+          }
+        }
+        continue;
+      }
 
       const newStatus = statusFromLive(found.status);
       if (!newStatus) continue;
@@ -215,6 +238,11 @@ exports.handler = async () => {
       if (scoreChanged) {
         patch.score = score;
         patch.winner90 = winner90(score.home, score.away);
+      }
+      // Mata-mata encerrando: grava quem avançou (pênaltis/prorrogação) já neste tick.
+      if (newStatus === 'FINISHED' && isKO(m)) {
+        const adv = advancerFromOutcomes(found.outcomes);
+        if (adv && adv !== m.advancer) patch.advancer = adv;
       }
       if (!Object.keys(patch).length) continue;
 
