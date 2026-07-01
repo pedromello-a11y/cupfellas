@@ -1823,6 +1823,8 @@ body.exp-banner .notif-btn.on{color:#1e1900;background:linear-gradient(180deg,va
 .bk-tm.won{background:rgba(232,197,71,.16)}
 .bk-tm.won .bk-nm{color:var(--gold);font-weight:800}
 .bk-tm.lost{opacity:.42}
+.bk-m.brk-done .bk-tm.pickable{cursor:default}
+.bk-m.brk-done .bk-tm.pickable:hover{background:transparent}
 .chave-clear{margin-left:10px;background:none;border:1px solid var(--border);color:var(--gold-dim);font-size:11px;padding:6px 12px;border-radius:8px;cursor:pointer;align-self:center}
 .chave-clear:hover{color:var(--gold);border-color:var(--gold-dim)}
 .brk-final{max-width:320px;margin:6px auto 0;text-align:center}
@@ -1995,6 +1997,8 @@ const TEAM_PT = {
   "Bolivia":"Bolívia","Venezuela":"Venezuela","Panama":"Panamá","Honduras":"Honduras",
   "Jamaica":"Jamaica","DR Congo":"Rep. do Congo","Mali":"Mali","Burkina Faso":"Burkina Faso",
   "Uzbekistan":"Uzbequistão","Jordan":"Jordânia","UAE":"Emirados Árabes","Iraq":"Iraque",
+  "Bosnia-Herzegovina":"Bósnia-Herzegovina","Bosnia and Herzegovina":"Bósnia-Herzegovina",
+  "Congo DR":"Rep. do Congo","Cape Verde Islands":"Cabo Verde",
   "A definir":"A definir"
 };
 const ptName = n => TEAM_PT[n] || n || "A definir";
@@ -2825,6 +2829,22 @@ const BRK_R32=[
   {id:"M87",a:{t:"ru",g:"D"},b:{t:"ru",g:"G"}},
   {id:"M88",a:{t:"w",g:"J"}, b:{t:"ru",g:"H"}}
 ];
+// mapa slot-bracket → ID real do Firebase (football-data.org) para os 16-avos
+// Atualizado pós-sorteio oficial: os pares reais divergem da fórmula de grupos
+const BRK_FB_ID={
+  // Lado A
+  "M74":"537415","M77":"537416","M73":"537417","M75":"537418",
+  "M83":"537419","M84":"537420","M81":"537421","M82":"537422",
+  // Lado B
+  "M76":"537423","M78":"537424","M79":"537425","M80":"537426",
+  "M86":"537427","M88":"537428","M85":"537429","M87":"537430"
+};
+// vencedores nos pênaltis (winner90="DRAW" mas alguém passou): "HOME"|"AWAY"
+const BRK_PEN_WINNER={
+  "537415":"AWAY", // Alemanha 1×1 Paraguai → Paraguai nos pênaltis (4-3)
+  "537418":"AWAY"  // Holanda 1×1 Marrocos  → Marrocos nos pênaltis (3-2)
+};
+
 // grupos elegíveis p/ o 3º de cada slot (M-id → grupos), p/ casar os 8 melhores 3ºs
 const BRK_THIRD_SLOTS=[
   {id:"M74",set:["A","B","C","D","F"]},{id:"M77",set:["C","D","F","G","H"]},
@@ -2879,6 +2899,13 @@ function brkSlotTeam(mid, ref, P){
    S.brkPick[mid]="a"|"b" marca quem o usuário escolheu pra passar. Os jogos das fases
    seguintes herdam os vencedores escolhidos (brkPair recursivo). */
 function brkPair(mid, P){
+  // usa dados reais do Firebase quando disponíveis
+  const fbId=BRK_FB_ID[mid];
+  if(fbId && S.matches[fbId]){
+    const m=S.matches[fbId];
+    const toTeam=(t)=>t&&t.name&&t.name!=='A definir'?t:null;
+    return {a:{team:toTeam(m.home),label:m.home?.name||'a definir'}, b:{team:toTeam(m.away),label:m.away?.name||'a definir'}};
+  }
   const r32=BRK_R32.find(x=>x.id===mid);
   if(r32) return {a:brkSlotTeam(mid,r32.a,P), b:brkSlotTeam(mid,r32.b,P)};
   const f=BRK_FEED[mid];
@@ -2886,6 +2913,18 @@ function brkPair(mid, P){
   return {a:wslot(f[0]), b:wslot(f[1])};
 }
 function brkWinner(mid, P){
+  // 1. resultado real do Firebase (FINISHED)
+  const fbId=BRK_FB_ID[mid];
+  if(fbId && S.matches[fbId]){
+    const m=S.matches[fbId];
+    if(m.status==='FINISHED'){
+      // advancer = quem avançou de fato (inclui prorrogação/pênaltis, vem do sync)
+      const w=m.advancer||BRK_PEN_WINNER[fbId]||m.winner90;
+      if(w==='HOME') return m.home;
+      if(w==='AWAY') return m.away;
+    }
+  }
+  // 2. simulação do usuário
   const pick=S.brkPick[mid]; if(!pick) return null;
   const pair=brkPair(mid,P); const slot=pick==="a"?pair.a:pair.b;
   return slot&&slot.team ? slot.team : null;
@@ -2893,6 +2932,9 @@ function brkWinner(mid, P){
 function brkChildOf(mid){ for(const k in BRK_FEED){ if(BRK_FEED[k][0]===mid||BRK_FEED[k][1]===mid) return k; } return null; }
 function brkClearDownstream(mid){ let c=brkChildOf(mid); while(c){ delete S.brkPick[c]; c=brkChildOf(c); } }
 function brkPickTeam(mid, side){
+  // bloqueia pick em jogo já encerrado (resultado real prevalece)
+  const fbId=BRK_FB_ID[mid];
+  if(fbId && S.matches[fbId] && S.matches[fbId].status==='FINISHED') return;
   if(S.brkPick[mid]===side) delete S.brkPick[mid]; else S.brkPick[mid]=side;
   brkClearDownstream(mid); // mudou o vencedor → invalida as escolhas que dependiam dele
   renderScreen();
@@ -2940,9 +2982,17 @@ function brkPickRow(mid, side, slot, pick){
   return row;
 }
 function brkMatchCard(mid, P){
-  const pair=brkPair(mid,P), pick=S.brkPick[mid];
+  const pair=brkPair(mid,P);
   const decided = !!(pair.a.team && pair.b.team);
-  const c=el("div","bk-m"+(decided?"":" tbd-card"));
+  const fbId=BRK_FB_ID[mid];
+  const isFinished = !!(fbId && S.matches[fbId] && S.matches[fbId].status==='FINISHED');
+  // Para jogos encerrados, determina o vencedor real; para simulação, usa o pick do usuário
+  let pick = S.brkPick[mid];
+  if(isFinished){
+    const rw=brkWinner(mid,P);
+    if(rw) pick = (rw===pair.a.team) ? 'a' : 'b';
+  }
+  const c=el("div","bk-m"+(decided?"":" tbd-card")+(isFinished?" brk-done":""));
   c.appendChild(brkPickRow(mid,"a",pair.a,pick));
   c.appendChild(brkPickRow(mid,"b",pair.b,pick));
   return c;
