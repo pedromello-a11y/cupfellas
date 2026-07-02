@@ -226,11 +226,34 @@ exports.handler = async () => {
         continue;
       }
 
-      const newStatus = statusFromLive(found.status);
+      let newStatus = statusFromLive(found.status);
       if (!newStatus) continue;
 
       const scoreStr = newStatus === 'FINISHED' ? (found.ft_score || found.score) : found.score;
-      const score = parseScore(scoreStr);
+      let score = parseScore(scoreStr);
+
+      // MATA-MATA NÃO TERMINA EMPATADO — bug real visto 01/07 (Bélgica x Senegal, LAST_32): a
+      // live-score-api marcou "FINISHED" com 2×2 no apito DOS 90 MINUTOS (fim da etapa normal,
+      // ainda ia pra prorrogação), e o código fechou o jogo cedo demais. O gol que decidiu em
+      // 3×2 só chegou ~40min depois, num tick que ainda tratava o jogo como encerrado. Regra do
+      // próprio mata-mata: se empatou, SEMPRE vai pra prorrogação/pênaltis — nunca acaba empatado.
+      // Então "FINISHED" com placar empatado só é real quando o provider já expõe um outcome
+      // decisivo (extra_time/penalty_shootout); sem isso, é só o intervalo pré-prorrogação —
+      // trata como jogo ainda rolando e deixa os próximos ticks acompanharem.
+      if (newStatus === 'FINISHED' && isKO(m) && score && score.home === score.away && !advancerFromOutcomes(found.outcomes)) {
+        newStatus = (m.status === 'PAUSED' || m.status === 'IN_PLAY') ? m.status : 'IN_PLAY';
+      }
+
+      // ANTI-REGRESSÃO DE PLACAR NO FECHAMENTO — mesmo incidente: mesmo quando o fechamento é
+      // legítimo, o `ft_score` do tick que fecha o jogo pode chegar desatualizado (voltar um
+      // placar mais velho que o já gravado por um tick anterior). Sem esta trava o placar
+      // REGREDIA, reabria uma "cravada" errada (pontos falsos) que o sync de 15min corrigia
+      // depois — dando a impressão de "ganhei os pontos e depois perdi". Nunca deixa o total de
+      // gols cair no fechamento; só corrige gol pra baixo por VAR durante o jogo (fluxo normal
+      // acima, fora deste bloco).
+      if (newStatus === 'FINISHED' && score && m.score && goalsSum(score) < goalsSum(m.score)) {
+        score = { home: m.score.home, away: m.score.away };
+      }
 
       const scoreChanged = score && (score.home !== (m.score && m.score.home) || score.away !== (m.score && m.score.away));
       const patch = {};
